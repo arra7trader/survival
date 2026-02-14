@@ -76,14 +76,27 @@ export default function Dashboard() {
 
     const fetchAll = useCallback(async () => {
         try {
-            const [statusRes, healthRes, chartRes] = await Promise.all([
+            const [statusRes, healthRes, chartRes, debugRes] = await Promise.all([
                 fetch('/api/trading/status'),
                 fetch('/api/health'),
                 fetch('/api/trading/chart'),
+                fetch('/api/debug/balance').catch(() => ({ json: () => ({ totalUSDT: 0 }) }))
             ]);
-            setData(await statusRes.json());
-            setHealth(await healthRes.json());
-            setChart(await chartRes.json());
+
+            const statusData = await statusRes.json();
+            const healthData = await healthRes.json();
+            const chartData = await chartRes.json();
+            const debugData = await debugRes.json();
+
+            // FALLBACK LOGIC: If DB balance is 0, use Debug Balance (Real Exchange Data)
+            if (statusData?.portfolio?.balance?.total === 0 && debugData?.totalUSDT > 0) {
+                statusData.portfolio.balance.total = debugData.totalUSDT;
+                statusData.portfolio.balance.free = debugData.freeUSDT;
+            }
+
+            setData(statusData);
+            setHealth(healthData);
+            setChart(chartData);
         } catch { } finally { setLoading(false); }
     }, []);
 
