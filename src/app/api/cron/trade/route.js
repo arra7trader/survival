@@ -62,8 +62,12 @@ export async function GET(request) {
     }
 
     // 4. HUNT FOR NEW TRADES (Predator Mode)
+    // Vercel Hobby Limit: 10s. We can't analyze 30 coins.
+    // Solution: Shuffle and pick 5 random coins to hunt per cycle.
+    const shuffledPairs = pairs.sort(() => 0.5 - Math.random()).slice(0, 5);
+
     const startTime = Date.now();
-    for (const symbol of pairs) {
+    for (const symbol of shuffledPairs) {
         if (Date.now() - startTime > 8000) break; // Time limit
 
         // Skip if we already have a position
