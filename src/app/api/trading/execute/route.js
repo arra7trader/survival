@@ -6,6 +6,8 @@ import { makeDecision } from '@/lib/strategy';
 import { checkRiskRules, calculateSLTP, checkOpenTrades } from '@/lib/risk-manager';
 import { dbRun, dbAll } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request) {
     try {
         const { symbol = 'BTC/USDT' } = await request.json().catch(() => ({}));

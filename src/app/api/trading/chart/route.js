@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { dbAll } from '@/lib/db';
 import { fetchBalance } from '@/lib/exchange';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
     try {
         // Stateless Mode: 

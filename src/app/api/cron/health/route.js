@@ -3,6 +3,8 @@ import { isExchangeConnected, fetchBalance } from '@/lib/exchange';
 import { dbRun, getSetting, setSetting, dbAll } from '@/lib/db';
 import { withRetry } from '@/lib/risk-manager';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request) {
     const authHeader = request.headers.get('authorization');
     const cronSecret = process.env.CRON_SECRET;

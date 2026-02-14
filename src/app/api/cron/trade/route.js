@@ -8,6 +8,7 @@ import { dbRun, dbGet, getSetting } from '@/lib/db';
 import { runSelfOptimizer } from '@/lib/self-optimizer';
 import { syncWithExchange } from '@/lib/sync';
 
+export const dynamic = 'force-dynamic';
 export const maxDuration = 10; // 10s timeout for Hobby plan (avoid hard kill)
 
 export async function GET(request) {

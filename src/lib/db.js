@@ -11,7 +11,10 @@ export async function getDb() {
   if (dbInstance) return dbInstance;
 
   // Initialize SQL.js in memory
-  const SQL = await initSqlJs();
+  // CRITICAL: Use CDN-hosted WASM to avoid Vercel filesystem issues
+  const SQL = await initSqlJs({
+    locateFile: file => `https://sql.js.org/dist/${file}`
+  });
   dbInstance = new SQL.Database(); // No file buffer = in-memory only
 
   initTables(dbInstance);

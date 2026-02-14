@@ -4,6 +4,8 @@ import { calculateIndicators } from '@/lib/indicators';
 import { analyzeMarket } from '@/lib/ai-analyzer';
 import { makeDecision } from '@/lib/strategy';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request) {
     try {
         const { searchParams } = new URL(request.url);

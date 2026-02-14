@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getTradeHistory } from '@/lib/portfolio';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
     try {
         const trades = await getTradeHistory(100);
