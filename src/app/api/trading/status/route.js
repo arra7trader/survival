@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { fetchBalance, fetchTicker } from '@/lib/exchange';
+
+export const dynamic = 'force-dynamic';
 import { getPortfolio } from '@/lib/portfolio';
 import { getRecentSignals } from '@/lib/portfolio';
 

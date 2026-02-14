@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import ccxt from 'ccxt';
+import { fetchBalance, fetchTicker } from '@/lib/exchange';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
     try {
