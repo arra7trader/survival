@@ -127,20 +127,20 @@ export default function Dashboard() {
                     border: '1px solid var(--border)',
                 }}>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600, marginBottom: 8 }}>
-                        Your Earnings
+                        Total Balance
                     </div>
                     <div style={{
                         fontFamily: 'var(--font-mono)', fontSize: '3.5rem', fontWeight: 800,
-                        color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)',
+                        color: 'var(--cyan)',
                         lineHeight: 1.1,
                     }}>
-                        {loading ? '...' : `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`}
+                        {loading ? '...' : `$${(balance?.total || 0).toFixed(2)}`}
                     </div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', color: 'var(--text-muted)', marginTop: 8 }}>
-                        {loading ? '' : `${roi >= 0 ? '+' : ''}${roi.toFixed(1)}% ROI`}
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)', marginTop: 8 }}>
+                        {loading ? '' : `Earnings: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)} (${roi.toFixed(1)}%)`}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 12 }}>
-                        Current Balance: ${balance?.total?.toFixed(2) || '0.00'} • {stats?.totalTrades || 0} trades executed
+                        {stats?.totalTrades || 0} trades executed • Win Rate: {stats?.winRate || 0}%
                     </div>
                 </div>
 
