@@ -83,7 +83,7 @@ function initTables(db) {
     take_profit_pct: '5',         // Higher Reward
     min_confluence: '4',          // Strict entry (requires 4/6 factors)
     emergency_floor: '2',
-    trading_pairs: 'BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,BNB/USDT',
+    trading_pairs: 'BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,ADA/USDT,AVAX/USDT,DOGE/USDT,SHIB/USDT,PEPE/USDT,WIF/USDT,BONK/USDT,LINK/USDT,RENDER/USDT,FET/USDT,NEAR/USDT,SUI/USDT,APT/USDT,LTC/USDT,BCH/USDT,FIL/USDT,ARB/USDT,OP/USDT,TIA/USDT,INJ/USDT,RUNE/USDT,DOT/USDT,MATIC/USDT,UNI/USDT,STX/USDT',
     trading_enabled: 'true',
     initial_budget: '20'
   };

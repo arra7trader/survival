@@ -18,13 +18,18 @@ The bot now runs in **Stateless Mode**.
 - **Immortal**: Even if Vercel server restarts or crashes, the bot loses nothing. It simply "wakes up", checks the blockchain/exchange, and continues where it left off.
 - **Minimum Balance**: Lowered to **$2** (though $10+ is recommended for smooth trading).
 
-### 🧠 Self-Optimizer
-Runs every 10 trades and auto-adjusts:
-- Win rate < 35% → tightens confluence (more selective)
-- Win rate > 65% → loosens for more trades
-- SL getting hit too often → widens SL, reduces position size
-- TP rarely reached → lowers target for more frequent wins
-- A pair consistently losing → removes from rotation
+### 🧠 Strategy Engine: "The Predator"
+- **Dip Sniper**: Buys when RSI < 40 in an Uptrend (Buy Low).
+- **Breakout Chaser**: Buys when Price hits Highs + Volume Spike (Momentum).
+- **Trend Follower**: Buys when MACD & Trend align perfectly.
+- **AI Veto**: If AI detects bad sentiment, it cancels any signal.
+
+### 🛡️ Risk Manager: "Profit Locking"
+Once a trade is green, we never let it go red.
+- **+1% Profit** → SL moves to Break-Even.
+- **+3% Profit** → SL moves to +1.5% (Locked).
+- **+5% Profit** → SL moves to +3% (Locked).
+- **+10% Profit** → SL moves to +8% (Moonbag).
 
 ### 🩹 Self-Healing
 - API failures → retry 3x with 2s/4s/6s backoff
