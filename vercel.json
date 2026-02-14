@@ -2,15 +2,5 @@
     "framework": "nextjs",
     "buildCommand": "next build",
     "devCommand": "next dev",
-    "installCommand": "npm install",
-    "crons": [
-        {
-            "path": "/api/cron/trade",
-            "schedule": "*/5 * * * *"
-        },
-        {
-            "path": "/api/cron/health",
-            "schedule": "*/10 * * * *"
-        }
-    ]
+    "installCommand": "npm install"
 }
