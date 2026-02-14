@@ -38,8 +38,8 @@ export async function GET(request) {
     const allOpen = await dbAll("SELECT symbol FROM trades WHERE status = 'open'");
     const openSymbolList = allOpen.map(t => t.symbol);
 
-    // 3. SELECT HUNT CANDIDATES (Random 2)
-    const shuffledPairs = pairs.sort(() => 0.5 - Math.random()).slice(0, 2);
+    // 3. SELECT HUNT CANDIDATES (Random 1)
+    const shuffledPairs = pairs.sort(() => 0.5 - Math.random()).slice(0, 1);
 
     // 4. FETCH PRICES (Only for Open Positions + Hunt Candidates)
     const targetSymbols = [...new Set([...openSymbolList, ...shuffledPairs])];
@@ -69,7 +69,7 @@ export async function GET(request) {
 
     // 5. HUNT FOR NEW TRADES (Predator Mode)
     // Vercel Hobby Limit: 10s. Strict.
-    // Solution: We already picked 2 random coins in step 3.
+    // Solution: We already picked 1 random coin in step 3.
 
     const startTime = Date.now();
     for (const symbol of shuffledPairs) {
@@ -80,7 +80,7 @@ export async function GET(request) {
         if (existing) continue;
 
         try {
-            const candles = await fetchCandles(symbol, '5m', 50);
+            const candles = await fetchCandles(symbol, '5m', 30);
             const indicators = calculateIndicators(candles);
 
             // Inject 24h High/Volume for Breakout Strategy
