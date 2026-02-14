@@ -1,41 +1,84 @@
+
 import { NextResponse } from 'next/server';
 import { isExchangeConnected, fetchBalance } from '@/lib/exchange';
-import { dbRun, dbAll, dbGet } from '@/lib/db';
+import { dbAll, getSetting } from '@/lib/db';
 
 export async function GET() {
     try {
-        const exchangeOk = await isExchangeConnected();
-        const aiOk = !!process.env.GROQ_API_KEY;
-        const balance = await fetchBalance();
-        const openTrades = await dbAll("SELECT * FROM trades WHERE status = 'open'");
-        const totalTrades = await dbGet("SELECT COUNT(*) as count FROM trades");
-        const recentHealth = await dbAll("SELECT * FROM health_logs ORDER BY created_at DESC LIMIT 10");
+        let exchangeConnected = false;
+        let balance = { total: 0, free: 0 };
+        let balanceError = null;
 
-        const status = exchangeOk ? (balance.total < 10 ? 'warning' : 'healthy') : 'critical';
-        const message = !exchangeOk ? 'Exchange not connected (no API keys)'
-            : balance.total < 10 ? `Low balance: $${balance.total.toFixed(2)}`
-                : `Running. Balance: $${balance.total.toFixed(2)}, ${openTrades.length} open positions`;
+        try {
+            exchangeConnected = await isExchangeConnected();
+            if (exchangeConnected) {
+                balance = await fetchBalance();
+            }
+        } catch (err) {
+            console.error('Exchange connection error:', err);
+            balanceError = err.message;
+        }
 
-        await dbRun(
-            `INSERT INTO health_logs (status, exchange_connected, ai_connected, balance, message) VALUES (?, ?, ?, ?, ?)`,
-            [status, exchangeOk ? 1 : 0, aiOk ? 1 : 0, balance.total, message]
-        );
+        // Check AI connection (Groq) - verify key presence
+        const aiConnected = !!process.env.GROQ_API_KEY;
+
+        // Get trading stats
+        let openPositions = 0;
+        let totalTrades = 0;
+        let history = [];
+
+        try {
+            const openResult = await dbAll("SELECT count(*) as count FROM trades WHERE status = 'open'");
+            openPositions = openResult[0]?.count || 0;
+
+            const totalResult = await dbAll("SELECT count(*) as count FROM trades");
+            totalTrades = totalResult[0]?.count || 0;
+
+            history = await dbAll("SELECT * FROM health_logs ORDER BY created_at DESC LIMIT 10");
+        } catch (dbErr) {
+            console.error('Database error:', dbErr);
+        }
+
+        let status = 'critical';
+        if (exchangeConnected && aiConnected) status = 'healthy';
+        else if (exchangeConnected || aiConnected) status = 'warning';
+
+        if (!exchangeConnected) status = 'offline';
+
+        // Check emergency stop
+        try {
+            const tradingEnabled = (await getSetting('trading_enabled')) !== 'false';
+            if (!tradingEnabled) status = 'stopped';
+        } catch { }
 
         return NextResponse.json({
             status,
-            exchange: { connected: exchangeOk, balance: balance.total },
-            ai: { connected: aiOk, provider: 'Groq' },
-            trading: {
-                openPositions: openTrades.length,
-                totalTrades: totalTrades?.count || 0,
-                balance: balance.total,
-                freeBalance: balance.free,
+            exchange: {
+                connected: exchangeConnected,
+                balance: balance.total
             },
-            message,
-            history: recentHealth,
-            timestamp: new Date().toISOString(),
+            ai: {
+                connected: aiConnected,
+                provider: 'Groq'
+            },
+            trading: {
+                openPositions,
+                totalTrades,
+                balance: balance.total,
+                freeBalance: balance.free
+            },
+            message: !exchangeConnected
+                ? (balanceError ? `Connection Error: ${balanceError}` : 'Exchange not connected (Check API Keys)')
+                : 'System operational',
+            history,
+            timestamp: new Date().toISOString()
         });
-    } catch (err) {
-        return NextResponse.json({ error: err.message, status: 'error' }, { status: 500 });
+    } catch (error) {
+        return NextResponse.json({
+            status: 'critical',
+            error: error.message,
+            message: 'System critical error',
+            timestamp: new Date().toISOString()
+        }, { status: 500 });
     }
 }
