@@ -11,10 +11,20 @@ export async function getDb() {
   if (dbInstance) return dbInstance;
 
   // Initialize SQL.js in memory
-  // CRITICAL: Use CDN-hosted WASM to avoid Vercel filesystem issues
-  const SQL = await initSqlJs({
-    locateFile: file => `https://sql.js.org/dist/${file}`
-  });
+  // CRITICAL: Fetch WASM binary via HTTP to avoid Vercel filesystem issues
+  // Node.js sql.js uses fs.readFileSync for locateFile paths, so we must
+  // download the binary ourselves and pass it as wasmBinary.
+  let SQL;
+  try {
+    const wasmUrl = 'https://sql.js.org/dist/sql-wasm.wasm';
+    const wasmResponse = await fetch(wasmUrl);
+    const wasmBinary = await wasmResponse.arrayBuffer();
+    SQL = await initSqlJs({ wasmBinary });
+  } catch (e) {
+    // Fallback: try without WASM (uses asm.js, slower but works everywhere)
+    console.warn('WASM fetch failed, trying without WASM:', e.message);
+    SQL = await initSqlJs();
+  }
   dbInstance = new SQL.Database(); // No file buffer = in-memory only
 
   initTables(dbInstance);
