@@ -1,5 +1,4 @@
 import { dbAll, dbRun, getSetting } from './db';
-import { closePosition } from './exchange';
 
 // Helper: Retry wrapper
 export async function withRetry(fn, operationName, retries = 3) {
@@ -14,22 +13,23 @@ export async function withRetry(fn, operationName, retries = 3) {
     }
 }
 
-// 1. Check if we can open a new trade
+// 1. Position Sizing (Compounding)
 export async function checkRiskRules(balance, side) {
-    const maxPosPct = parseFloat(await getSetting('max_position_pct') || '30');
+    const maxPosPct = parseFloat(await getSetting('max_position_pct') || '40');
     const floor = parseFloat(await getSetting('emergency_floor') || '2');
 
     if (balance.total < floor) return { allowed: false, reason: 'Emergency Stop' };
     if (side === 'buy' && balance.free < 2) return { allowed: false, reason: 'Insufficient Funds' };
 
+    // Compound: Use Percentage of TOTAL balance (profits included)
     const positionSize = (balance.total * maxPosPct) / 100;
-    const minTrade = 6; // $6 buffer for $5 limit
+    const minTrade = 6;
 
     return {
         allowed: balance.free >= minTrade,
         positionSize: Math.max(positionSize, minTrade),
         stopLossPct: parseFloat(await getSetting('stop_loss_pct') || '2'),
-        takeProfitPct: parseFloat(await getSetting('take_profit_pct') || '4')
+        takeProfitPct: parseFloat(await getSetting('take_profit_pct') || '5')
     };
 }
 
@@ -40,7 +40,8 @@ export function calculateSLTP(entryPrice, side, slPct, tpPct) {
     };
 }
 
-// 2. MONITOR OPEN TRADES (The "Never Lose" Logic)
+// 2. DYNAMIC TRAILING STOP (Profit Lock)
+// "Ratchet" locking: Never lets profit slide back heavily.
 export async function checkOpenTrades(currentPrices) {
     const trades = await dbAll("SELECT * FROM trades WHERE status = 'open'");
     const hits = [];
@@ -51,16 +52,28 @@ export async function checkOpenTrades(currentPrices) {
 
         const pnlPct = ((currentPrice - trade.entry_price) / trade.entry_price) * 100;
 
-        // PREDATOR LOGIC: "Secure the Bag"
-        // If profit > 0.8%, move Stop Loss to Break Even (+0.1%)
-        // We update the DB 'stop_loss' field dynamically.
+        // --- PROFIT LOCKING LADDER ---
+        // 1. Break Even: If > +1%, move SL to Entry + 0.1%
+        // 2. Profit Lock 1: If > +3%, move SL to +1.5%
+        // 3. Profit Lock 2: If > +5%, move SL to +3%
+        // 4. Moonbag: If > +10%, move SL to +8%
 
-        if (pnlPct > 0.8 && trade.stop_loss < trade.entry_price) {
-            const newSL = trade.entry_price * 1.001; // Entry + 0.1% (cover fees)
+        let newSL = trade.stop_loss;
+        const entry = trade.entry_price;
+
+        if (pnlPct >= 10 && trade.stop_loss < entry * 1.08) {
+            newSL = entry * 1.08;
+        } else if (pnlPct >= 5 && trade.stop_loss < entry * 1.03) {
+            newSL = entry * 1.03;
+        } else if (pnlPct >= 3 && trade.stop_loss < entry * 1.015) {
+            newSL = entry * 1.015;
+        } else if (pnlPct >= 1 && trade.stop_loss < entry * 1.001) {
+            newSL = entry * 1.001;
+        }
+
+        if (newSL > trade.stop_loss) {
             await dbRun("UPDATE trades SET stop_loss = ? WHERE id = ?", [newSL, trade.id]);
-            // Log it? Maybe not needed for performance, but good to know
-            console.log(`🔒 Secured profit for ${trade.symbol}: SL moved to Break-Even`);
-            trade.stop_loss = newSL; // Update local var for check below
+            trade.stop_loss = newSL; // Update for check below
         }
 
         // Check Exit Conditions
@@ -69,10 +82,10 @@ export async function checkOpenTrades(currentPrices) {
 
         if (currentPrice <= trade.stop_loss) {
             exit = true;
-            reason = 'Stop Loss Hit';
+            reason = 'Stop Loss (Trailing)';
         } else if (currentPrice >= trade.take_profit) {
             exit = true;
-            reason = 'Take Profit Hit';
+            reason = 'Take Profit Target';
         }
 
         if (exit) {
