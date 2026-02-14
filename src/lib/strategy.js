@@ -41,11 +41,12 @@ export async function makeDecision(indicators, aiAnalysis) {
     }
 
     // --- DECISION ---
-    // Threshold: 7/10 for Buy (Aggressive but Calculated)
+    // Threshold: 6/10 for Buy (Aggressive Growth Mode)
+    // We take more shots, but rely on Risk Manager to cut losers fast.
     let action = 'hold';
     let confidence = score / 10;
 
-    if (score >= 7) {
+    if (score >= 6) {
         action = 'buy';
     }
 

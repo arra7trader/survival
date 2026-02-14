@@ -61,7 +61,12 @@ export async function checkOpenTrades(currentPrices) {
         let newSL = trade.stop_loss;
         const entry = trade.entry_price;
 
-        if (pnlPct >= 10 && trade.stop_loss < entry * 1.08) {
+        // AGGRESSIVE SCALPING LOGIC
+        // Secure even faster. If +0.5% profit, move SL to Break Even.
+        // We want to "Free Ride" as soon as possible.
+        if (pnlPct > 0.5 && trade.stop_loss < trade.entry_price) {
+            newSL = trade.entry_price * 1.001; // Entry + 0.1% (fees)
+        } else if (pnlPct >= 10 && trade.stop_loss < entry * 1.08) {
             newSL = entry * 1.08;
         } else if (pnlPct >= 5 && trade.stop_loss < entry * 1.03) {
             newSL = entry * 1.03;
