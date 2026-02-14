@@ -35,72 +35,71 @@ export async function GET(request) {
     const openTrades = await dbGet("SELECT symbol FROM trades WHERE status = 'open'");
     // If we have an open trade for a symbol, skip analyzing it for BUY, only check EXIT.
 
-    // We iterate pairs but stop if time runs out
-    const startTime = Date.now();
-
+    // 2. FETCH PRICES & MARKET DATA (Batch efficient)
+    const prices = {};
     for (const symbol of pairs) {
-        if (Date.now() - startTime > 8000) break; // Stop if nearing 10s limit
+        try {
+            // We need current price for Risk Manager to check Trailing Stops
+            const ticker = await fetchTicker(symbol);
+            prices[symbol] = ticker.last;
+        } catch (e) { console.error(`Price fetch failed for ${symbol}`, e); }
+    }
+
+    // 3. MANAGE OPEN POSITIONS (Profit Ladder & Trailing Stops)
+    // This function inside risk-manager now handles the "Ratchet" logic (locking profits)
+    const closedTrades = await checkOpenTrades(prices);
+
+    for (const hit of closedTrades) {
+        // Execute the close on Exchange
+        await closePosition(hit.trade.symbol, 'sell', hit.trade.quantity);
+
+        // Update DB
+        await dbRun("UPDATE trades SET status = 'closed', exit_price = ?, pnl = ?, closed_at = datetime('now') WHERE id = ?",
+            [hit.exitPrice, hit.pnl, hit.trade.id]);
+
+        results.push({ symbol: hit.trade.symbol, action: 'closed', pnl: hit.pnlPct, reason: hit.reason });
+    }
+
+    // 4. HUNT FOR NEW TRADES (Predator Mode)
+    const startTime = Date.now();
+    for (const symbol of pairs) {
+        if (Date.now() - startTime > 8000) break; // Time limit
+
+        // Skip if we already have a position
+        const existing = await dbGet("SELECT id FROM trades WHERE symbol = ? AND status = 'open'", [symbol]);
+        if (existing) continue;
 
         try {
-            // Self-healing: wrap fetch
-            const candles = await withRetry(() => fetchCandles(symbol, '5m', 100), `fetch candles ${symbol}`);
-            const ticker = await withRetry(() => fetchTicker(symbol), `fetch ticker ${symbol}`);
-            const balance = await withRetry(() => fetchBalance(), 'fetch balance');
+            const candles = await fetchCandles(symbol, '5m', 100);
             const indicators = calculateIndicators(candles);
 
-            // AI analysis (fallback if fails)
-            let aiAnalysis;
-            try {
-                aiAnalysis = await analyzeMarket(symbol, indicators, candles);
-            } catch {
-                aiAnalysis = { direction: 'neutral', confidence: 0.5, reasoning: 'AI offline', patterns: [] };
-            }
+            // Inject 24h High/Volume for Breakout Strategy
+            indicators.price = prices[symbol];
+            // indicators.high24h... need to fetch if not in candles (candles cover 500m usually)
 
-            // Check if we already have this position
-            const existingTrade = await dbGet("SELECT * FROM trades WHERE symbol = ? AND status = 'open'", [symbol]);
+            let aiAnalysis = { direction: 'neutral', confidence: 0.5 };
+            try { aiAnalysis = await analyzeMarket(symbol, indicators, candles); } catch { }
 
-            if (existingTrade) {
-                // MANAGE EXIT (SL/TP)
-                // In stateless mode, we might not have 'stop_loss' stored accurately if we just synced.
-                // So we rely on current global settings or dynamic calculation.
-                // For now, simple check: is PnL < -2% or > +4%?
+            const decision = await makeDecision(indicators, aiAnalysis);
 
-                // Calculate PnL
-                const pnlPct = existingTrade.entry_price
-                    ? ((ticker.last - existingTrade.entry_price) / existingTrade.entry_price) * 100
-                    : 0;
+            if (decision.action === 'buy') {
+                // ... (Existing Risk Check & Buy Logic) ...
+                const risk = await checkRiskRules(await fetchBalance(), 'buy'); // Fetch balance fresh? Or pass cached?
+                // For safety, fetch fresh balance for sizing
+                const balance = await fetchBalance();
 
-                const sl = parseFloat(await getSetting('stop_loss_pct') || '2');
-                const tp = parseFloat(await getSetting('take_profit_pct') || '4');
+                if (risk.allowed && balance.free >= 6) {
+                    const qty = (risk.positionSize / prices[symbol]).toPrecision(5);
 
-                if (pnlPct <= -sl || pnlPct >= tp) {
-                    await closePosition(symbol, 'buy', existingTrade.quantity);
-                    await dbRun("UPDATE trades SET status = 'closed', closed_at = datetime('now') WHERE id = ?", [existingTrade.id]);
-                    results.push({ symbol, action: 'closed', pnl: pnlPct });
-                }
-            } else {
-                // LOOK FOR ENTRY
-                const decision = await makeDecision(indicators, aiAnalysis);
-
-                if (decision.action === 'buy') {
-                    const riskCheck = await checkRiskRules(balance, decision.action);
-                    if (riskCheck.allowed) {
-                        const quantity = riskCheck.positionSize / ticker.last;
-                        // Precision handling (simplified)
-                        const roundedQty = parseFloat(quantity.toPrecision(4));
-
-                        if (roundedQty > 0) {
-                            await placeOrder(symbol, 'buy', roundedQty);
-                            await dbRun("INSERT INTO trades (symbol, side, entry_price, quantity, status) VALUES (?, 'buy', ?, ?, 'open')",
-                                [symbol, ticker.last, roundedQty]);
-                            results.push({ symbol, action: 'buy', price: ticker.last });
-                        }
-                    }
+                    await placeOrder(symbol, 'buy', qty);
+                    await dbRun("INSERT INTO trades (symbol, side, entry_price, quantity, status) VALUES (?, 'buy', ?, ?, 'open')",
+                        [symbol, prices[symbol], qty]);
+                    results.push({ symbol, action: 'buy', price: prices[symbol], reason: decision.reason });
                 }
             }
 
         } catch (err) {
-            results.push({ symbol, error: err.message });
+            console.error(`Error processing ${symbol}:`, err);
         }
     }
 
