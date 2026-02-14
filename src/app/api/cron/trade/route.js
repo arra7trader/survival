@@ -4,7 +4,7 @@ import { calculateIndicators } from '@/lib/indicators';
 import { analyzeMarket } from '@/lib/ai-analyzer';
 import { makeDecision } from '@/lib/strategy';
 import { checkRiskRules, calculateSLTP, checkOpenTrades, withRetry } from '@/lib/risk-manager';
-import { dbRun, dbGet, getSetting } from '@/lib/db';
+import { dbRun, dbGet, dbAll, getSetting } from '@/lib/db';
 import { runSelfOptimizer } from '@/lib/self-optimizer';
 import { syncWithExchange } from '@/lib/sync';
 
@@ -32,15 +32,21 @@ export async function GET(request) {
     const results = [];
 
     // 2. CHECK EXISTING OPEN POSITIONS
-    // (Sync via syncWithExchange already refreshed the DB with real positions)
     const openTrades = await dbGet("SELECT symbol FROM trades WHERE status = 'open'");
-    // If we have an open trade for a symbol, skip analyzing it for BUY, only check EXIT.
+    const openSymbols = openTrades ? [openTrades.symbol] : []; // Assuming dbGet returns one row or null? Wait, dbGet returns first row. 
+    // Actually dbAll for multiple. Let's fix that.
+    const allOpen = await dbAll("SELECT symbol FROM trades WHERE status = 'open'");
+    const openSymbolList = allOpen.map(t => t.symbol);
 
-    // 2. FETCH PRICES & MARKET DATA (Batch efficient)
+    // 3. SELECT HUNT CANDIDATES (Random 2)
+    const shuffledPairs = pairs.sort(() => 0.5 - Math.random()).slice(0, 2);
+
+    // 4. FETCH PRICES (Only for Open Positions + Hunt Candidates)
+    const targetSymbols = [...new Set([...openSymbolList, ...shuffledPairs])];
+
     const prices = {};
-    for (const symbol of pairs) {
+    for (const symbol of targetSymbols) {
         try {
-            // We need current price for Risk Manager to check Trailing Stops
             const ticker = await fetchTicker(symbol);
             prices[symbol] = ticker.last;
         } catch (e) { console.error(`Price fetch failed for ${symbol}`, e); }
@@ -61,10 +67,9 @@ export async function GET(request) {
         results.push({ symbol: hit.trade.symbol, action: 'closed', pnl: hit.pnlPct, reason: hit.reason });
     }
 
-    // 4. HUNT FOR NEW TRADES (Predator Mode)
+    // 5. HUNT FOR NEW TRADES (Predator Mode)
     // Vercel Hobby Limit: 10s. Strict.
-    // Solution: Shuffle and pick 2 random coins to hunt per cycle.
-    const shuffledPairs = pairs.sort(() => 0.5 - Math.random()).slice(0, 2);
+    // Solution: We already picked 2 random coins in step 3.
 
     const startTime = Date.now();
     for (const symbol of shuffledPairs) {
