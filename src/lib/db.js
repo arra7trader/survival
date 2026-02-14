@@ -1,34 +1,26 @@
 import initSqlJs from 'sql.js';
-import path from 'path';
-import fs from 'fs';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'survival.db');
 let dbInstance = null;
 
-async function getDb() {
+// IN-MEMORY DATABASE (Stateless)
+// Re-initialized cleanly on every serverless function cold start.
+// This prevents read-only filesystem errors on Vercel.
+// We rely on 'sync.js' to populate it from Exchange Data at runtime.
+
+export async function getDb() {
     if (dbInstance) return dbInstance;
 
+    // Initialize SQL.js in memory
     const SQL = await initSqlJs();
-    const dir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    if (fs.existsSync(DB_PATH)) {
-        const buffer = fs.readFileSync(DB_PATH);
-        dbInstance = new SQL.Database(buffer);
-    } else {
-        dbInstance = new SQL.Database();
-    }
+    dbInstance = new SQL.Database(); // No file buffer = in-memory only
 
     initTables(dbInstance);
     return dbInstance;
 }
 
 function saveDb(db) {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    const dir = path.dirname(DB_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(DB_PATH, buffer);
+    // No-op for in-memory DB. 
+    // We cannot save to disk on Vercel.
 }
 
 function initTables(db) {
@@ -36,7 +28,6 @@ function initTables(db) {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
     side TEXT NOT NULL,
-    type TEXT DEFAULT 'market',
     entry_price REAL,
     exit_price REAL,
     quantity REAL,
@@ -67,12 +58,6 @@ function initTables(db) {
     db.run(`CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     total_balance REAL,
-    available_balance REAL,
-    unrealized_pnl REAL DEFAULT 0,
-    total_pnl REAL DEFAULT 0,
-    win_rate REAL DEFAULT 0,
-    total_trades INTEGER DEFAULT 0,
-    winning_trades INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
   )`);
 
@@ -88,8 +73,7 @@ function initTables(db) {
 
     db.run(`CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
-    value TEXT,
-    updated_at TEXT DEFAULT (datetime('now'))
+    value TEXT
   )`);
 
     // Default settings
@@ -97,29 +81,21 @@ function initTables(db) {
         max_position_pct: '30',
         stop_loss_pct: '2',
         take_profit_pct: '4',
-        max_daily_loss_pct: '5',
-        max_open_positions: '2',
         min_confluence: '3',
         emergency_floor: '10',
-        trading_pairs: 'BTC/USDT,ETH/USDT',
+        trading_pairs: 'BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT',
         trading_enabled: 'true',
         initial_budget: '20'
     };
 
     for (const [key, value] of Object.entries(defaults)) {
-        const existing = db.exec(`SELECT value FROM settings WHERE key = '${key}'`);
-        if (existing.length === 0) {
-            db.run(`INSERT INTO settings (key, value) VALUES (?, ?)`, [key, value]);
-        }
+        db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [key, value]);
     }
-
-    saveDb(db);
 }
 
 export async function dbRun(sql, params = []) {
     const db = await getDb();
     db.run(sql, params);
-    saveDb(db);
 }
 
 export async function dbGet(sql, params = []) {
@@ -127,9 +103,7 @@ export async function dbGet(sql, params = []) {
     const stmt = db.prepare(sql);
     stmt.bind(params);
     let row = null;
-    if (stmt.step()) {
-        row = stmt.getAsObject();
-    }
+    if (stmt.step()) row = stmt.getAsObject();
     stmt.free();
     return row;
 }
@@ -139,9 +113,7 @@ export async function dbAll(sql, params = []) {
     const stmt = db.prepare(sql);
     stmt.bind(params);
     const rows = [];
-    while (stmt.step()) {
-        rows.push(stmt.getAsObject());
-    }
+    while (stmt.step()) rows.push(stmt.getAsObject());
     stmt.free();
     return rows;
 }
@@ -152,5 +124,5 @@ export async function getSetting(key) {
 }
 
 export async function setSetting(key, value) {
-    await dbRun(`INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`, [key, String(value)]);
+    await dbRun(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, [key, String(value)]);
 }

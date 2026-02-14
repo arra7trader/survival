@@ -6,6 +6,9 @@ import { makeDecision } from '@/lib/strategy';
 import { checkRiskRules, calculateSLTP, checkOpenTrades, withRetry } from '@/lib/risk-manager';
 import { dbRun, dbGet, getSetting } from '@/lib/db';
 import { runSelfOptimizer } from '@/lib/self-optimizer';
+import { syncWithExchange } from '@/lib/sync';
+
+export const maxDuration = 10; // 10s timeout for Hobby plan (avoid hard kill)
 
 export async function GET(request) {
     const authHeader = request.headers.get('authorization');
@@ -14,90 +17,98 @@ export async function GET(request) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // 0. SYNC WITH REALITY (Stateless)
+    await syncWithExchange();
+
+    // 1. CHECK GUARDRAILS
     const tradingEnabled = (await getSetting('trading_enabled')) !== 'false';
     if (!tradingEnabled) {
         return NextResponse.json({ message: 'Trading disabled — AI is paused', timestamp: new Date().toISOString() });
     }
 
-    const pairsStr = await getSetting('trading_pairs') || 'BTC/USDT,ETH/USDT';
+    const pairsStr = await getSetting('trading_pairs') || 'BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT';
     const pairs = pairsStr.split(',').map(s => s.trim()).filter(Boolean);
     const results = [];
 
+    // 2. CHECK EXISTING OPEN POSITIONS
+    // (Sync via syncWithExchange already refreshed the DB with real positions)
+    const openTrades = await dbGet("SELECT symbol FROM trades WHERE status = 'open'");
+    // If we have an open trade for a symbol, skip analyzing it for BUY, only check EXIT.
+
+    // We iterate pairs but stop if time runs out
+    const startTime = Date.now();
+
     for (const symbol of pairs) {
+        if (Date.now() - startTime > 8000) break; // Stop if nearing 10s limit
+
         try {
-            // Self-healing: wrap each step with retry
+            // Self-healing: wrap fetch
             const candles = await withRetry(() => fetchCandles(symbol, '5m', 100), `fetch candles ${symbol}`);
             const ticker = await withRetry(() => fetchTicker(symbol), `fetch ticker ${symbol}`);
             const balance = await withRetry(() => fetchBalance(), 'fetch balance');
             const indicators = calculateIndicators(candles);
 
-            // AI analysis with graceful degradation
+            // AI analysis (fallback if fails)
             let aiAnalysis;
             try {
                 aiAnalysis = await analyzeMarket(symbol, indicators, candles);
             } catch {
-                aiAnalysis = { direction: 'neutral', confidence: 0.5, reasoning: 'AI offline — using indicators only', patterns: [] };
+                aiAnalysis = { direction: 'neutral', confidence: 0.5, reasoning: 'AI offline', patterns: [] };
             }
 
-            // Check SL/TP on open trades
-            const currentPrices = { [symbol]: ticker.last };
-            const tradesHit = await checkOpenTrades(currentPrices);
-            for (const hit of tradesHit) {
-                try { await closePosition(hit.trade.symbol, hit.trade.side, hit.trade.quantity); } catch { }
-                await dbRun(
-                    `UPDATE trades SET status = 'closed', exit_price = ?, pnl = ?, pnl_percent = ?, closed_at = datetime('now') WHERE id = ?`,
-                    [hit.exitPrice, hit.pnl, hit.pnlPct, hit.trade.id]
-                );
-            }
+            // Check if we already have this position
+            const existingTrade = await dbGet("SELECT * FROM trades WHERE symbol = ? AND status = 'open'", [symbol]);
 
-            // Decision
-            const decision = await makeDecision(indicators, aiAnalysis);
-            let trade = null;
+            if (existingTrade) {
+                // MANAGE EXIT (SL/TP)
+                // In stateless mode, we might not have 'stop_loss' stored accurately if we just synced.
+                // So we rely on current global settings or dynamic calculation.
+                // For now, simple check: is PnL < -2% or > +4%?
 
-            if (decision.action === 'buy' || decision.action === 'sell') {
-                const riskCheck = await checkRiskRules(balance, decision.action);
-                if (riskCheck.allowed) {
-                    const quantity = riskCheck.positionSize / ticker.last;
-                    const roundedQty = Math.floor(quantity * 100000) / 100000;
-                    if (roundedQty > 0) {
-                        try {
-                            const order = await withRetry(() => placeOrder(symbol, decision.action, roundedQty), `place order ${symbol}`);
-                            const entryPrice = order.price || ticker.last;
-                            const { stopLoss, takeProfit } = calculateSLTP(entryPrice, decision.action, riskCheck.stopLossPct, riskCheck.takeProfitPct);
-                            await dbRun(
-                                `INSERT INTO trades (symbol, side, entry_price, quantity, stop_loss, take_profit, signals, ai_analysis, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                                [symbol, decision.action, entryPrice, roundedQty, stopLoss, takeProfit, JSON.stringify(decision.indicatorDetails), JSON.stringify(decision.aiAnalysis), decision.confidence]
-                            );
-                            trade = { symbol, side: decision.action, price: entryPrice, quantity: roundedQty };
-                        } catch { }
+                // Calculate PnL
+                const pnlPct = existingTrade.entry_price
+                    ? ((ticker.last - existingTrade.entry_price) / existingTrade.entry_price) * 100
+                    : 0;
+
+                const sl = parseFloat(await getSetting('stop_loss_pct') || '2');
+                const tp = parseFloat(await getSetting('take_profit_pct') || '4');
+
+                if (pnlPct <= -sl || pnlPct >= tp) {
+                    await closePosition(symbol, 'buy', existingTrade.quantity);
+                    await dbRun("UPDATE trades SET status = 'closed', closed_at = datetime('now') WHERE id = ?", [existingTrade.id]);
+                    results.push({ symbol, action: 'closed', pnl: pnlPct });
+                }
+            } else {
+                // LOOK FOR ENTRY
+                const decision = await makeDecision(indicators, aiAnalysis);
+
+                if (decision.action === 'buy') {
+                    const riskCheck = await checkRiskRules(balance, decision.action);
+                    if (riskCheck.allowed) {
+                        const quantity = riskCheck.positionSize / ticker.last;
+                        // Precision handling (simplified)
+                        const roundedQty = parseFloat(quantity.toPrecision(4));
+
+                        if (roundedQty > 0) {
+                            await placeOrder(symbol, 'buy', roundedQty);
+                            await dbRun("INSERT INTO trades (symbol, side, entry_price, quantity, status) VALUES (?, 'buy', ?, ?, 'open')",
+                                [symbol, ticker.last, roundedQty]);
+                            results.push({ symbol, action: 'buy', price: ticker.last });
+                        }
                     }
                 }
             }
 
-            // Log signal
-            await dbRun(
-                `INSERT INTO signals (symbol, direction, confidence, indicators, ai_reasoning, action_taken) VALUES (?, ?, ?, ?, ?, ?)`,
-                [symbol, decision.action, decision.confidence, JSON.stringify(decision.indicatorDetails), decision.aiAnalysis?.reasoning, trade ? `${decision.action} executed` : decision.action]
-            );
-
-            results.push({ symbol, price: ticker.last, action: decision.action, trade, closedTrades: tradesHit.length });
         } catch (err) {
             results.push({ symbol, error: err.message });
         }
     }
 
-    // Self-optimization: run every 10 closed trades
-    try {
-        const closedCount = await dbGet("SELECT COUNT(*) as count FROM trades WHERE status = 'closed'");
-        const count = closedCount?.count || 0;
-        if (count > 0 && count % 10 === 0) {
-            const optimLog = await runSelfOptimizer();
-            results.push({ optimizer: optimLog });
-        }
-    } catch { }
+    // 3. OPTIMIZER (Run if we have data)
+    // runSelfOptimizer(); // Optional in stateless mode
 
     return NextResponse.json({
-        message: '🧠 Trade cycle complete',
+        message: 'Cycle complete',
         results,
         timestamp: new Date().toISOString(),
     });
