@@ -3,18 +3,18 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 
 // Simple SVG equity chart
-function EquityChart({ data }) {
+function EquityChart({ data, initialBalance }) {
     if (!data || data.length < 2) {
         return (
             <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
                 <div style={{ fontSize: '2rem', marginBottom: 8 }}>📈</div>
-                <p style={{ fontSize: '0.85rem' }}>Chart will appear after trades are executed</p>
+                <p style={{ fontSize: '0.85rem' }}>Chart and balance history will appear here</p>
                 <div style={{ marginTop: 16, height: 120, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 3 }}>
-                    {[20, 20, 20, 20, 20].map((v, i) => (
-                        <div key={i} style={{ width: 40, height: 60, background: 'var(--bg-hover)', borderRadius: '4px 4px 0 0', opacity: 0.3 + i * 0.15 }}></div>
+                    {[1, 1, 1, 1, 1].map((v, i) => (
+                        <div key={i} style={{ width: 40, height: 40 + (i * 10), background: 'var(--bg-hover)', borderRadius: '4px 4px 0 0', opacity: 0.2 + i * 0.1 }}></div>
                     ))}
                 </div>
-                <p style={{ fontSize: '0.7rem', marginTop: 8, color: 'var(--text-muted)' }}>Starting balance: $20.00</p>
+                {initialBalance > 0 && <p style={{ fontSize: '0.7rem', marginTop: 8, color: 'var(--text-muted)' }}>Current Balance: ${initialBalance.toFixed(2)}</p>}
             </div>
         );
     }
@@ -97,7 +97,7 @@ export default function Dashboard() {
     const stats = p?.stats;
     const balance = p?.balance;
     const totalPnl = parseFloat(stats?.totalPnl || 0);
-    const initialBudget = 20;
+    const initialBudget = chart?.initialBalance || 20; // Fallback if API hasn't loaded
     const roi = initialBudget > 0 ? ((totalPnl / initialBudget) * 100) : 0;
     const isAlive = health?.status === 'healthy' || health?.status === 'warning';
 
@@ -140,7 +140,7 @@ export default function Dashboard() {
                         {loading ? '' : `${roi >= 0 ? '+' : ''}${roi.toFixed(1)}% ROI`}
                     </div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 12 }}>
-                        Started with $20 • {stats?.totalTrades || 0} trades executed
+                        Current Balance: ${balance?.total?.toFixed(2) || '0.00'} • {stats?.totalTrades || 0} trades executed
                     </div>
                 </div>
 
@@ -149,10 +149,10 @@ export default function Dashboard() {
                     <div className="card-header">
                         <span>💰 Balance History</span>
                         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--cyan)' }}>
-                            ${(balance?.total || 20).toFixed(2)}
+                            ${(balance?.total || 0).toFixed(2)}
                         </span>
                     </div>
-                    <EquityChart data={chart?.equityCurve || []} />
+                    <EquityChart data={chart?.equityCurve || []} initialBalance={chart?.initialBalance} />
                     {chart?.equityCurve?.length >= 2 && (
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 4px 0', fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                             <span>{chart.equityCurve[0]?.label || 'Start'}</span>
@@ -213,7 +213,7 @@ export default function Dashboard() {
                                         {' '}{pos.symbol}
                                     </div>
                                     <div className="pos-detail">
-                                        Entry: ${pos.entry_price?.toFixed(2)} • Qty: {pos.quantity?.toFixed(5)}
+                                        Entry: ${pos.entry_price > 0 ? pos.entry_price.toFixed(5) : '?'} • Qty: {pos.quantity?.toFixed(5)}
                                     </div>
                                 </div>
                                 <div className="pos-pnl">
