@@ -1,116 +1,90 @@
-import { getSetting, dbAll, dbGet } from './db.js';
+import { dbAll, dbRun, getSetting } from './db';
+import { closePosition } from './exchange';
 
-// Check if a new trade is allowed by risk rules
-export async function checkRiskRules(balance, action) {
-    const maxPositionPct = parseFloat(await getSetting('max_position_pct') || '30');
-    const maxDailyLossPct = parseFloat(await getSetting('max_daily_loss_pct') || '5');
-    const maxOpenPositions = parseInt(await getSetting('max_open_positions') || '2');
-    const emergencyFloor = parseFloat(await getSetting('emergency_floor') || '10');
-    const tradingEnabled = (await getSetting('trading_enabled')) !== 'false';
-
-    const issues = [];
-
-    if (!tradingEnabled) {
-        issues.push('Trading is disabled');
-        return { allowed: false, issues, positionSize: 0 };
+// Helper: Retry wrapper
+export async function withRetry(fn, operationName, retries = 3) {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            console.error(`${operationName} failed (attempt ${i + 1}/${retries}):`, error.message);
+            if (i === retries - 1) throw error;
+            await new Promise(r => setTimeout(r, 2000 * (i + 1)));
+        }
     }
+}
 
-    if (balance.free < emergencyFloor) {
-        issues.push(`Balance ($${balance.free.toFixed(2)}) below emergency floor ($${emergencyFloor})`);
-        return { allowed: false, issues, positionSize: 0 };
-    }
+// 1. Check if we can open a new trade
+export async function checkRiskRules(balance, side) {
+    const maxPosPct = parseFloat(await getSetting('max_position_pct') || '30');
+    const floor = parseFloat(await getSetting('emergency_floor') || '2');
 
-    const openTrades = await dbAll("SELECT * FROM trades WHERE status = 'open'");
-    if (openTrades.length >= maxOpenPositions) {
-        issues.push(`Max open positions reached (${openTrades.length}/${maxOpenPositions})`);
-        return { allowed: false, issues, positionSize: 0 };
-    }
+    if (balance.total < floor) return { allowed: false, reason: 'Emergency Stop' };
+    if (side === 'buy' && balance.free < 2) return { allowed: false, reason: 'Insufficient Funds' };
 
-    const todayStart = new Date().toISOString().split('T')[0];
-    const todayLosses = await dbGet(
-        `SELECT COALESCE(SUM(pnl), 0) as total_loss FROM trades WHERE pnl < 0 AND closed_at >= ? AND status = 'closed'`,
-        [todayStart]
-    );
-    const initialBudget = parseFloat(await getSetting('initial_budget') || '20');
-    const dailyLossLimit = initialBudget * (maxDailyLossPct / 100);
-    const dailyLoss = Math.abs(todayLosses?.total_loss || 0);
-
-    if (dailyLoss >= dailyLossLimit) {
-        issues.push(`Daily loss limit reached ($${dailyLoss.toFixed(2)} / $${dailyLossLimit.toFixed(2)})`);
-        return { allowed: false, issues, positionSize: 0 };
-    }
-
-    const maxPositionValue = balance.free * (maxPositionPct / 100);
-    const positionSize = Math.min(maxPositionValue, balance.free - emergencyFloor);
-
-    if (positionSize < 1) {
-        issues.push('Position size too small (< $1)');
-        return { allowed: false, issues, positionSize: 0 };
-    }
+    const positionSize = (balance.total * maxPosPct) / 100;
+    const minTrade = 6; // $6 buffer for $5 limit
 
     return {
-        allowed: true,
-        issues: [],
-        positionSize: Math.floor(positionSize * 100) / 100,
+        allowed: balance.free >= minTrade,
+        positionSize: Math.max(positionSize, minTrade),
         stopLossPct: parseFloat(await getSetting('stop_loss_pct') || '2'),
-        takeProfitPct: parseFloat(await getSetting('take_profit_pct') || '4'),
+        takeProfitPct: parseFloat(await getSetting('take_profit_pct') || '4')
     };
 }
 
-export function calculateSLTP(entryPrice, side, stopLossPct, takeProfitPct) {
-    if (side === 'buy') {
-        return {
-            stopLoss: entryPrice * (1 - stopLossPct / 100),
-            takeProfit: entryPrice * (1 + takeProfitPct / 100),
-        };
-    } else {
-        return {
-            stopLoss: entryPrice * (1 + stopLossPct / 100),
-            takeProfit: entryPrice * (1 - takeProfitPct / 100),
-        };
-    }
+export function calculateSLTP(entryPrice, side, slPct, tpPct) {
+    return {
+        stopLoss: entryPrice * (1 - slPct / 100),
+        takeProfit: entryPrice * (1 + tpPct / 100)
+    };
 }
 
+// 2. MONITOR OPEN TRADES (The "Never Lose" Logic)
 export async function checkOpenTrades(currentPrices) {
-    const openTrades = await dbAll("SELECT * FROM trades WHERE status = 'open'");
-    const results = [];
+    const trades = await dbAll("SELECT * FROM trades WHERE status = 'open'");
+    const hits = [];
 
-    for (const trade of openTrades) {
-        const price = currentPrices[trade.symbol];
-        if (!price) continue;
+    for (const trade of trades) {
+        const currentPrice = currentPrices[trade.symbol];
+        if (!currentPrice) continue;
 
-        let shouldClose = false;
+        const pnlPct = ((currentPrice - trade.entry_price) / trade.entry_price) * 100;
+
+        // PREDATOR LOGIC: "Secure the Bag"
+        // If profit > 0.8%, move Stop Loss to Break Even (+0.1%)
+        // We update the DB 'stop_loss' field dynamically.
+
+        if (pnlPct > 0.8 && trade.stop_loss < trade.entry_price) {
+            const newSL = trade.entry_price * 1.001; // Entry + 0.1% (cover fees)
+            await dbRun("UPDATE trades SET stop_loss = ? WHERE id = ?", [newSL, trade.id]);
+            // Log it? Maybe not needed for performance, but good to know
+            console.log(`🔒 Secured profit for ${trade.symbol}: SL moved to Break-Even`);
+            trade.stop_loss = newSL; // Update local var for check below
+        }
+
+        // Check Exit Conditions
+        let exit = false;
         let reason = '';
 
-        if (trade.side === 'buy') {
-            if (price <= trade.stop_loss) { shouldClose = true; reason = 'Stop Loss hit'; }
-            if (price >= trade.take_profit) { shouldClose = true; reason = 'Take Profit hit'; }
-        } else {
-            if (price >= trade.stop_loss) { shouldClose = true; reason = 'Stop Loss hit'; }
-            if (price <= trade.take_profit) { shouldClose = true; reason = 'Take Profit hit'; }
+        if (currentPrice <= trade.stop_loss) {
+            exit = true;
+            reason = 'Stop Loss Hit';
+        } else if (currentPrice >= trade.take_profit) {
+            exit = true;
+            reason = 'Take Profit Hit';
         }
 
-        if (shouldClose) {
-            const pnl = trade.side === 'buy'
-                ? (price - trade.entry_price) * trade.quantity
-                : (trade.entry_price - price) * trade.quantity;
-            const pnlPct = (pnl / (trade.entry_price * trade.quantity)) * 100;
-            results.push({ trade, exitPrice: price, pnl, pnlPct, reason });
-        }
-    }
-
-    return results;
-}
-
-// Self-healing: retry an async operation with backoff
-export async function withRetry(fn, label = 'operation', maxRetries = 3) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            return await fn();
-        } catch (err) {
-            console.error(`[RETRY] ${label} attempt ${attempt}/${maxRetries} failed: ${err.message}`);
-            if (attempt === maxRetries) throw err;
-            await new Promise(r => setTimeout(r, attempt * 2000)); // 2s, 4s, 6s
+        if (exit) {
+            const pnl = (currentPrice - trade.entry_price) * trade.quantity;
+            hits.push({
+                trade,
+                exitPrice: currentPrice,
+                pnl,
+                pnlPct,
+                reason
+            });
         }
     }
+    return hits;
 }

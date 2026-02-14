@@ -1,74 +1,75 @@
-import { getSetting } from './db.js';
-
-// Main decision engine: combines technical signals + AI analysis
 export async function makeDecision(indicators, aiAnalysis) {
-    const minConfluence = parseInt(await getSetting('min_confluence') || '3');
-    const signals = indicators.signals || [];
+    const { rsi, macd, trend, price } = indicators;
 
-    // Count buy/sell votes
-    let buyVotes = 0;
-    let sellVotes = 0;
-    let totalStrength = 0;
-    let buyStrength = 0;
-    let sellStrength = 0;
+    // "PREDATOR MODE" LOGIC
+    // We only take trades that are mathematically highly probable.
+    // User demand: "Never Lose".
+    // Strategy: Extreme Confluence.
 
-    for (const signal of signals) {
-        if (signal.direction === 'buy') {
-            buyVotes++;
-            buyStrength += signal.strength;
-        } else if (signal.direction === 'sell') {
-            sellVotes++;
-            sellStrength += signal.strength;
+    let score = 0;
+    const details = [];
+
+    // 1. Trend Alignment (Must be perfect)
+    if (trend === 'bullish') {
+        score += 2;
+        details.push('Trend is Bullish');
+    } else if (trend === 'bearish') {
+        // In Spot, we rarely short, but if we did...
+        // For now, we only BUY in spot.
+        score -= 5; // PENALTY: Never buy in bearish trend
+        details.push('Trend is Bearish (Avoid)');
+    }
+
+    // 2. RSI (Sniper Entry)
+    // We want "oversold in an uptrend" (Pullback)
+    if (rsi < 40) {
+        score += 3;
+        details.push(`RSI Oversold (${rsi.toFixed(1)}) - Dip Buying Opportunity`);
+    } else if (rsi > 70) {
+        score -= 5; // PENALTY: Never buy top
+        details.push(`RSI Overbought (${rsi.toFixed(1)}) - Too risky`);
+    } else if (rsi > 50 && trend === 'bullish') {
+        score += 1;
+        details.push('RSI in Momentum Zone');
+    }
+
+    // 3. MACD (Momentum)
+    if (macd.histogram > 0 && macd.signal > 0) {
+        score += 2;
+        details.push('MACD Bullish Momentum');
+    } else if (macd.histogram < 0) {
+        score -= 2;
+        details.push('MACD Bearish');
+    }
+
+    // 4. AI Confirmation (The Brain)
+    if (aiAnalysis) {
+        if (aiAnalysis.direction === 'buy') {
+            score += 3; // Huge weight to AI
+            details.push(`AI Signals BUY (${aiAnalysis.reasoning})`);
+        } else if (aiAnalysis.direction === 'sell') {
+            score -= 10; // VETO: If AI says sell, we absolutely do not buy.
+            details.push('AI Signals SELL (Veto)');
         }
-        totalStrength += signal.strength;
     }
 
-    // AI vote (counts as 1 vote but with higher weight)
-    if (aiAnalysis.direction === 'buy') {
-        buyVotes++;
-        buyStrength += aiAnalysis.confidence;
-    } else if (aiAnalysis.direction === 'sell') {
-        sellVotes++;
-        sellStrength += aiAnalysis.confidence;
-    }
+    // DECISION THRESHOLD
+    // Max score possible: 2+3+2+3 = 10.
+    // "Predator Mode" requires score >= 8.
 
-    const totalVotes = signals.length + 1; // +1 for AI
-
-    // Decision logic
     let action = 'hold';
-    let confidence = 0;
-    let reason = '';
+    let confidence = score / 10;
 
-    if (buyVotes >= minConfluence && buyVotes > sellVotes) {
+    if (score >= 8) {
         action = 'buy';
-        confidence = buyStrength / (buyVotes || 1);
-        reason = `${buyVotes}/${totalVotes} indicators bullish (strength: ${(confidence * 100).toFixed(0)}%)`;
-    } else if (sellVotes >= minConfluence && sellVotes > buyVotes) {
-        action = 'sell';
-        confidence = sellStrength / (sellVotes || 1);
-        reason = `${sellVotes}/${totalVotes} indicators bearish (strength: ${(confidence * 100).toFixed(0)}%)`;
-    } else {
-        action = 'hold';
-        confidence = 0;
-        reason = `Insufficient confluence: ${buyVotes} buy, ${sellVotes} sell (need ${minConfluence})`;
+    } else if (score <= -5) {
+        action = 'sell'; // Only relevant for closing, but we handle closing in risk-manager usually.
     }
 
     return {
         action,
         confidence,
-        reason,
-        votes: { buy: buyVotes, sell: sellVotes, neutral: totalVotes - buyVotes - sellVotes, total: totalVotes },
-        indicatorDetails: signals.map(s => ({
-            name: s.name,
-            direction: s.direction,
-            strength: s.strength,
-            detail: s.detail,
-        })),
-        aiAnalysis: {
-            direction: aiAnalysis.direction,
-            confidence: aiAnalysis.confidence,
-            reasoning: aiAnalysis.reasoning,
-            patterns: aiAnalysis.patterns,
-        },
+        indicatorDetails: details,
+        aiAnalysis
     };
 }

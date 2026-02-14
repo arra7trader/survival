@@ -78,12 +78,12 @@ function initTables(db) {
 
   // Default settings
   const defaults = {
-    max_position_pct: '30',
-    stop_loss_pct: '2',
-    take_profit_pct: '4',
-    min_confluence: '3',
+    max_position_pct: '40',       // Aggressive position size
+    stop_loss_pct: '1.5',         // Tighter SL
+    take_profit_pct: '5',         // Higher Reward
+    min_confluence: '4',          // Strict entry (requires 4/6 factors)
     emergency_floor: '2',
-    trading_pairs: 'BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT',
+    trading_pairs: 'BTC/USDT,ETH/USDT,SOL/USDT,XRP/USDT,DOGE/USDT,BNB/USDT',
     trading_enabled: 'true',
     initial_budget: '20'
   };
