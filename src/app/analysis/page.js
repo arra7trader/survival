@@ -48,8 +48,13 @@ export default function BrainPage() {
                     </ul>
                     <div className="nav-right">
                         <select className="select" value={symbol} onChange={e => setSymbol(e.target.value)}>
-                            <option value="BTC/USDT">BTC/USDT</option>
-                            <option value="ETH/USDT">ETH/USDT</option>
+                            {['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT',
+                                'SHIB/USDT', 'PEPE/USDT', 'WIF/USDT', 'BONK/USDT', 'LINK/USDT', 'RENDER/USDT', 'FET/USDT',
+                                'NEAR/USDT', 'SUI/USDT', 'APT/USDT', 'LTC/USDT', 'BCH/USDT', 'FIL/USDT', 'ARB/USDT', 'OP/USDT',
+                                'TIA/USDT', 'INJ/USDT', 'RUNE/USDT', 'DOT/USDT', 'MATIC/USDT', 'UNI/USDT', 'STX/USDT'
+                            ].map(pair => (
+                                <option key={pair} value={pair}>{pair}</option>
+                            ))}
                         </select>
                     </div>
                 </div>

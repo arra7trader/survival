@@ -67,7 +67,7 @@ export default function SystemPage() {
                 {/* System Components */}
                 <div className="grid-3" style={{ marginBottom: 20 }}>
                     <div className="card stat-card" style={{ textAlign: 'center' }}>
-                        <div className="stat-label">Exchange (Binance)</div>
+                        <div className="stat-label">Exchange (Bitget)</div>
                         <div style={{ fontSize: '2rem', marginTop: 8 }}>
                             {health?.exchange?.connected ? '🟢' : '🔴'}
                         </div>
@@ -132,9 +132,9 @@ export default function SystemPage() {
                                         {log.created_at ? new Date(log.created_at).toLocaleString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
                                     </span>
                                     <span className={`badge ${log.status === 'healthy' ? 'badge-green' :
-                                            log.status === 'optimizer' ? 'badge-purple' :
-                                                log.status === 'recovered' ? 'badge-cyan' :
-                                                    log.status === 'warning' ? 'badge-amber' : 'badge-red'
+                                        log.status === 'optimizer' ? 'badge-purple' :
+                                            log.status === 'recovered' ? 'badge-cyan' :
+                                                log.status === 'warning' ? 'badge-amber' : 'badge-red'
                                         }`} style={{ flexShrink: 0 }}>
                                         {log.status === 'optimizer' ? '🧠 LEARN' : log.status}
                                     </span>
